@@ -2,14 +2,8 @@
 const Order = require('../models/Order');
 const Product = require('../models/Product');
 const User = require('../models/User');
-const {
-  sendOrderConfirmation,
-} = require('../services/orderEmailService');
-const {
-  getRates,
-  getRate,
-  purchaseLabel,
-} = require('../services/shippoService');
+const { sendOrderConfirmation } = require('../services/orderEmailService');
+const { getRates, getRate, purchaseLabel } = require('../services/shippoService');
 
 function ensureDevTestingEnabled() {
   if (
@@ -31,8 +25,18 @@ function cleanTestAddress(input = {}) {
     city: String(input.city || '').trim(),
     state: String(input.state || '').trim(),
     postalCode: String(input.postalCode || '').trim(),
-    country: String(input.country || '').trim().toUpperCase(),
+    country: String(input.country || 'US').trim().toUpperCase(),
   };
+
+  if (address.country !== 'US') {
+    const error = new Error(
+      'NARD & NOTES currently delivers only within the United States.'
+    );
+    error.status = 400;
+    throw error;
+  }
+
+  address.country = 'US';
 
   if (
     !address.recipientName ||
@@ -40,8 +44,7 @@ function cleanTestAddress(input = {}) {
     !address.line1 ||
     !address.city ||
     !address.state ||
-    !address.postalCode ||
-    !address.country
+    !address.postalCode
   ) {
     const error = new Error(
       'Complete all required shipping address fields.'
@@ -53,18 +56,13 @@ function cleanTestAddress(input = {}) {
   return address;
 }
 
-/**
- * Builds customs data from trusted database product information.
- * shipping.weightGrams must represent the net weight of one sellable unit.
- */
+// Build customs data from trusted database product information.
 async function buildTestCustomsItems(requestedItems, destinationCountry) {
   const senderCountry = String(
     process.env.SHIPPO_FROM_COUNTRY || ''
   ).trim().toUpperCase();
 
-  const destination = String(destinationCountry || '')
-    .trim()
-    .toUpperCase();
+  const destination = String(destinationCountry || '').trim().toUpperCase();
 
   if (!/^[A-Z]{2}$/.test(senderCountry)) {
     const error = new Error(
@@ -74,10 +72,7 @@ async function buildTestCustomsItems(requestedItems, destinationCountry) {
     throw error;
   }
 
-  // Domestic shipments do not require customs declarations.
-  if (destination === senderCountry) {
-    return [];
-  }
+  if (destination === senderCountry) return [];
 
   if (
     !Array.isArray(requestedItems) ||
@@ -85,7 +80,7 @@ async function buildTestCustomsItems(requestedItems, destinationCountry) {
     requestedItems.length > 50
   ) {
     const error = new Error(
-      'International shipping requires 1 to 50 items with SKU and quantity.'
+      'Shipping-rate testing requires 1 to 50 items with SKU and quantity.'
     );
     error.status = 400;
     throw error;
@@ -120,9 +115,7 @@ async function buildTestCustomsItems(requestedItems, destinationCountry) {
     );
 
     if (!product || !variant) {
-      const error = new Error(
-        `Active product variant not found: ${sku}`
-      );
+      const error = new Error(`Active product variant not found: ${sku}`);
       error.status = 400;
       throw error;
     }
@@ -151,9 +144,7 @@ async function buildTestCustomsItems(requestedItems, destinationCountry) {
     }
 
     if (!Number.isInteger(priceInCents) || priceInCents <= 0) {
-      const error = new Error(
-        `Invalid price for international test item: ${sku}`
-      );
+      const error = new Error(`Invalid price for shipping test item: ${sku}`);
       error.status = 400;
       throw error;
     }
@@ -177,7 +168,7 @@ async function buildTestCustomsItems(requestedItems, destinationCountry) {
 }
 
 // POST /api/dev-test-orders/rates
-// Gets shipping rates without creating an order or buying a label.
+// Shippo rate lookup for testing only; this does not set checkout shipping prices.
 exports.getTestShippingRates = async (req, res, next) => {
   try {
     ensureDevTestingEnabled();
@@ -191,28 +182,24 @@ exports.getTestShippingRates = async (req, res, next) => {
     if (
       !addressTo ||
       typeof addressTo !== 'object' ||
-      !addressTo.country
+      String(addressTo.country || '').trim().toUpperCase() !== 'US'
     ) {
       const error = new Error(
-        'Provide a destination address with a country.'
+        'NARD & NOTES currently delivers only within the United States.'
       );
       error.status = 400;
       throw error;
     }
 
-    const destinationCountry = String(addressTo.country)
-      .trim()
-      .toUpperCase();
-
     const customsItems = await buildTestCustomsItems(
       requestedItems,
-      destinationCountry
+      'US'
     );
 
     const result = await getRates({
       addressTo: {
         ...addressTo,
-        country: destinationCountry,
+        country: 'US',
       },
       parcel,
       customsItems,
@@ -229,7 +216,7 @@ exports.getTestShippingRates = async (req, res, next) => {
 };
 
 // POST /api/dev-test-orders/label
-// Creates a test label only; refuses to run with a live Shippo key.
+// Creates a test label only. A live Shippo key is rejected.
 exports.createTestShippingLabel = async (req, res, next) => {
   try {
     ensureDevTestingEnabled();
@@ -239,8 +226,7 @@ exports.createTestShippingLabel = async (req, res, next) => {
     if (!apiKey.startsWith('shippo_test_')) {
       return res.status(403).json({
         success: false,
-        message:
-          'A Shippo test API key is required. No label was purchased.',
+        message: 'A Shippo test API key is required. No label was purchased.',
       });
     }
 
@@ -257,43 +243,27 @@ exports.createTestShippingLabel = async (req, res, next) => {
 
     const rate = await getRate(shippingRateId);
 
-    console.log('[Shippo test rate diagnostic]', {
-      rateId: rate.object_id,
-      provider: rate.provider,
-      service: rate.servicelevel?.name,
-      shipmentId: rate.shipment,
-      destinationCountry: rate.address_to?.country || null,
-      rateMessages: rate.messages || [],
-    });
-
     if (
       rate.object_id !== shippingRateId ||
       String(rate.currency || '').toUpperCase() !== 'USD' ||
       !Number.isFinite(Number(rate.amount)) ||
-      Number(rate.amount) < 0
+      Number(rate.amount) < 0 ||
+      String(rate.address_to?.country || '').toUpperCase() !== 'US'
     ) {
       return res.status(400).json({
         success: false,
         message:
-          'The selected shipping rate is invalid. Fetch fresh rates and try again.',
+          'The selected rate must be valid, in USD, and addressed to the US.',
       });
     }
 
     const transaction = await purchaseLabel(shippingRateId);
 
-    console.log('[Shippo test label transaction]', {
-      transactionId: transaction.object_id,
-      status: transaction.status,
-      test: transaction.test,
-      objectState: transaction.object_state,
-      messages: transaction.messages,
-    });
-
     if (transaction.test !== true) {
       return res.status(502).json({
         success: false,
         message:
-          'Shippo did not confirm a test transaction. Check the Shippo dashboard before proceeding.',
+          'Shippo did not confirm a test transaction. Check the Shippo dashboard.',
       });
     }
 
@@ -339,10 +309,8 @@ exports.createTestShippingLabel = async (req, res, next) => {
 };
 
 // POST /api/dev-test-orders
-// Creates a cancelled, unpaid test order and attempts confirmation email.
+// Creates a cancelled, unpaid test order. No inventory is deducted.
 exports.createTestOrder = async (req, res, next) => {
-  let order;
-
   try {
     ensureDevTestingEnabled();
 
@@ -358,7 +326,6 @@ exports.createTestOrder = async (req, res, next) => {
     const {
       items: requestedItems,
       shippingAddress,
-      shippingRateId,
     } = req.body || {};
 
     if (
@@ -388,8 +355,7 @@ exports.createTestOrder = async (req, res, next) => {
       ) {
         return res.status(400).json({
           success: false,
-          message:
-            'Each item needs a valid SKU and quantity from 1 to 10.',
+          message: 'Each item needs a valid SKU and quantity from 1 to 10.',
         });
       }
 
@@ -437,34 +403,18 @@ exports.createTestOrder = async (req, res, next) => {
       });
     }
 
-    let shippingInCents = 0;
-    let shippingProvider = '';
-    let shippingService = '';
-
-    if (shippingRateId) {
-      const rate = await getRate(String(shippingRateId));
-
-      if (
-        rate.object_id !== shippingRateId ||
-        String(rate.currency || '').toLowerCase() !== 'usd' ||
-        !Number.isFinite(Number(rate.amount)) ||
-        Number(rate.amount) < 0
-      ) {
-        return res.status(400).json({
-          success: false,
-          message: 'The selected Shippo rate is invalid or not in USD.',
-        });
-      }
-
-      shippingInCents = Math.round(Number(rate.amount) * 100);
-      shippingProvider = String(rate.provider || '');
-      shippingService = rate.servicelevel?.name || 'Selected service';
-    }
+    // Fixed shipping policy, based on merchandise subtotal before discounts.
+    const shippingInCents = subtotalInCents >= 10000 ? 0 : 599;
+    const shippingProvider = 'Standard shipping';
+    const shippingService =
+      shippingInCents === 0
+        ? 'Standard shipping (free)'
+        : 'Standard shipping';
 
     const now = Date.now();
     const orderNumber = `TEST-NN-${now}`;
 
-    order = await Order.create({
+    const order = await Order.create({
       user: user._id,
       orderNumber,
       items,
@@ -480,7 +430,7 @@ exports.createTestOrder = async (req, res, next) => {
       status: 'cancelled',
       testMode: true,
       shippingProvider,
-      shippoRateId: shippingRateId || '',
+      shippoRateId: '',
       emailStatus: 'pending',
       statusHistory: [
         {
@@ -491,7 +441,6 @@ exports.createTestOrder = async (req, res, next) => {
       ],
     });
 
-    // Never deduct inventory or buy a label when creating a test order.
     let emailResult = {
       sent: false,
       reason: 'not_attempted',

@@ -442,37 +442,37 @@ exports.changePassword = async (req, res, next) => {
 };
 
 
-function cleanAddress(body) {
+
+function cleanAddress(body = {}) {
   const fields = [
-    'label',
-    'recipientName',
-    'phone',
-    'line1',
-    'line2',
-    'city',
-    'state',
-    'postalCode',
+    "label",
+    "recipientName",
+    "phone",
+    "line1",
+    "line2",
+    "city",
+    "state",
+    "postalCode",
   ];
 
   const address = {};
 
   for (const key of fields) {
-    address[key] = String(body[key] || '').trim();
+    address[key] = String(body[key] || "").trim();
   }
 
-  // Keep the country selected by the customer.
-  // Existing addresses without a country default to US.
-  const country = String(body.country || 'US').trim().toUpperCase();
-  const allowedCountries = ['US', 'NG'];
+  const country = String(body.country || "US")
+    .trim()
+    .toUpperCase();
 
-  if (!allowedCountries.includes(country)) {
+  if (country !== "US") {
     throw Object.assign(
-      new Error('Choose a supported delivery country.'),
+      new Error("NARD & NOTES currently delivers only within the United States."),
       { status: 400 }
     );
   }
 
-  address.country = country;
+  address.country = "US";
   address.isDefault = Boolean(body.isDefault);
 
   if (
@@ -484,24 +484,30 @@ function cleanAddress(body) {
     !address.postalCode
   ) {
     throw Object.assign(
-      new Error('Complete all required shipping address fields.'),
+      new Error("Complete all required shipping address fields."),
       { status: 400 }
     );
   }
 
   if (
-    Object.values(address).some(
-      (value) => typeof value === 'string' && value.length > 150
-    )
+    address.label.length > 40 ||
+    address.recipientName.length > 100 ||
+    address.phone.length > 30 ||
+    address.line1.length > 150 ||
+    address.line2.length > 150 ||
+    address.city.length > 100 ||
+    address.state.length > 100 ||
+    address.postalCode.length > 20
   ) {
     throw Object.assign(
-      new Error('One or more address fields are too long.'),
+      new Error("One or more address fields exceed the allowed length."),
       { status: 400 }
     );
   }
 
   return address;
 }
+
 
 
 exports.listAddresses = async (req, res, next) => {
