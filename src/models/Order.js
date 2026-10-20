@@ -54,13 +54,13 @@ const orderItemSchema = new mongoose.Schema(
 const shippingAddressSchema = new mongoose.Schema(
   {
     recipientName: { type: String, required: true, trim: true },
-    phone: { type: String, required: true, trim: true },
+    phone: { type: String, default: "", trim: true },
     line1: { type: String, required: true, trim: true },
     line2: { type: String, default: "", trim: true },
     city: { type: String, required: true, trim: true },
-    state: { type: String, required: true, trim: true },
-    postalCode: { type: String, required: true, trim: true },
-    country: { type: String, required: true, default: "US", enum: ["US"] },
+    state: { type: String, default: "", trim: true },
+    postalCode: { type: String, default: "", trim: true },
+    country: { type: String, required: true, default: "US", uppercase: true, minlength: 2, maxlength: 2 },
   },
   { _id: false }
 );
@@ -175,6 +175,10 @@ const orderSchema = new mongoose.Schema(
       default: "",
       trim: true,
     },
+    shippoRateId: { type: String, default: "", trim: true },
+    shippoTransactionId: { type: String, default: "", trim: true },
+    labelUrl: { type: String, default: "", trim: true },
+    promoCodeId: { type: mongoose.Schema.Types.ObjectId, ref: "PromoCode", default: null },
     trackingNumber: {
       type: String,
       default: "",

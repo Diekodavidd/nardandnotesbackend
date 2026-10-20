@@ -50,6 +50,26 @@ const productSchema = new mongoose.Schema(
     },
 
     imageUrl: { type: String, default: "" },
+shipping: {
+  weightGrams: {
+    type: Number,
+    required: true,
+    min: 1,
+  },
+  originCountry: {
+    type: String,
+    required: true,
+    uppercase: true,
+    trim: true,
+    minlength: 2,
+    maxlength: 2,
+  },
+  hsCode: {
+    type: String,
+    default: "",
+    trim: true,
+  },
+},
 
     variants: {
       type: [variantSchema],

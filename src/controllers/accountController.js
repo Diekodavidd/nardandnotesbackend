@@ -441,18 +441,68 @@ exports.changePassword = async (req, res, next) => {
   } catch (error) { next(error); }
 };
 
+
 function cleanAddress(body) {
-  const fields = ['label', 'recipientName', 'phone', 'line1', 'line2', 'city', 'state', 'postalCode'];
+  const fields = [
+    'label',
+    'recipientName',
+    'phone',
+    'line1',
+    'line2',
+    'city',
+    'state',
+    'postalCode',
+  ];
+
   const address = {};
-  for (const key of fields) address[key] = String(body[key] || '').trim();
-  address.country = 'US';
-  address.isDefault = Boolean(body.isDefault);
-  if (!address.recipientName || !address.phone || !address.line1 || !address.city || !address.state || !address.postalCode) {
-    throw Object.assign(new Error('Complete all required shipping address fields.'), { status: 400 });
+
+  for (const key of fields) {
+    address[key] = String(body[key] || '').trim();
   }
-  if (Object.values(address).some((v) => typeof v === 'string' && v.length > 150)) throw Object.assign(new Error('One or more address fields are too long.'), { status: 400 });
+
+  // Keep the country selected by the customer.
+  // Existing addresses without a country default to US.
+  const country = String(body.country || 'US').trim().toUpperCase();
+  const allowedCountries = ['US', 'NG'];
+
+  if (!allowedCountries.includes(country)) {
+    throw Object.assign(
+      new Error('Choose a supported delivery country.'),
+      { status: 400 }
+    );
+  }
+
+  address.country = country;
+  address.isDefault = Boolean(body.isDefault);
+
+  if (
+    !address.recipientName ||
+    !address.phone ||
+    !address.line1 ||
+    !address.city ||
+    !address.state ||
+    !address.postalCode
+  ) {
+    throw Object.assign(
+      new Error('Complete all required shipping address fields.'),
+      { status: 400 }
+    );
+  }
+
+  if (
+    Object.values(address).some(
+      (value) => typeof value === 'string' && value.length > 150
+    )
+  ) {
+    throw Object.assign(
+      new Error('One or more address fields are too long.'),
+      { status: 400 }
+    );
+  }
+
   return address;
 }
+
 
 exports.listAddresses = async (req, res, next) => {
   try { const user = await User.findById(req.user._id).select('addresses'); res.json({ success: true, addresses: user.addresses || [] }); }

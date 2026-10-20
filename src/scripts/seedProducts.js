@@ -14,6 +14,31 @@ function slugify(value) {
     .replace(/^-|-$/g, "");
 }
 
+function getShippingData(item) {
+  const weightGrams = Number(item.weightGrams);
+  const originCountry = String(item.originCountry || "")
+    .trim()
+    .toUpperCase();
+
+  if (!Number.isFinite(weightGrams) || weightGrams < 1) {
+    throw new Error(
+      `Add a valid weightGrams value to catalogueData.js for ${item.name}.`
+    );
+  }
+
+  if (!/^[A-Z]{2}$/.test(originCountry)) {
+    throw new Error(
+      `Add a valid two-letter originCountry to catalogueData.js for ${item.name}.`
+    );
+  }
+
+  return {
+    weightGrams,
+    originCountry,
+    hsCode: item.hsCode || "",
+  };
+}
+
 const fragranceProducts = fragrances.map((item) => ({
   name: item.name,
   slug: slugify(item.name),
@@ -32,6 +57,7 @@ const fragranceProducts = fragrances.map((item) => ({
   trackInventory: false,
   processingDaysMin: 3,
   processingDaysMax: 5,
+  shipping: getShippingData(item),
   imageUrl: productImages[item.name] || "",
   active: true,
   variants: [
@@ -67,6 +93,11 @@ const specialProducts = [
     trackInventory: false,
     processingDaysMin: 3,
     processingDaysMax: 5,
+    shipping: {
+      weightGrams: 180,
+      originCountry: "US",
+      hsCode: "",
+    },
     discoveryOptions: {
       selectionCount: 6,
       vialSizeMl: 2,
@@ -97,6 +128,11 @@ const specialProducts = [
     trackInventory: false,
     processingDaysMin: 3,
     processingDaysMax: 5,
+    shipping: {
+      weightGrams: 350,
+      originCountry: "US",
+      hsCode: "",
+    },
     discoveryOptions: {
       selectionCount: 17,
       vialSizeMl: 2,
@@ -127,6 +163,11 @@ const specialProducts = [
     trackInventory: false,
     processingDaysMin: 5,
     processingDaysMax: 7,
+    shipping: {
+      weightGrams: 250,
+      originCountry: "US",
+      hsCode: "",
+    },
     customBlendOptions: {
       minSelections: 2,
       maxSelections: 4,
@@ -158,10 +199,24 @@ async function seedProducts() {
       throw new Error("MONGODB_URI is missing from .env");
     }
 
+    // Validate all catalogue shipping data before connecting or writing.
+    const products = [...fragranceProducts, ...specialProducts];
+
+    for (const product of products) {
+      if (
+        !product.shipping ||
+        !Number.isFinite(Number(product.shipping.weightGrams)) ||
+        Number(product.shipping.weightGrams) < 1 ||
+        !/^[A-Z]{2}$/.test(product.shipping.originCountry || "")
+      ) {
+        throw new Error(
+          `Invalid shipping data for ${product.name}.`
+        );
+      }
+    }
+
     await mongoose.connect(process.env.MONGODB_URI);
     console.log("Connected to MongoDB:", mongoose.connection.name);
-
-    const products = [...fragranceProducts, ...specialProducts];
 
     let inserted = 0;
     let updated = 0;
@@ -172,13 +227,15 @@ async function seedProducts() {
       }).select("_id");
 
       if (existing) {
-        // Update product metadata and image.
-        // Preserve existing variants, prices, SKUs, and stock.
+        // Update catalogue metadata and shipping.
+        // Preserve existing variants, prices, SKUs and stock.
         const { variants, ...metadata } = product;
 
         await Product.updateOne(
           { _id: existing._id },
-          { $set: metadata },
+          {
+            $set: metadata,
+          },
           { runValidators: true }
         );
 
