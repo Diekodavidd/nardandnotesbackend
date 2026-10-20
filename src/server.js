@@ -26,9 +26,27 @@ app.disable("x-powered-by");
 
 app.use(helmet());
 
+const allowedOrigins = [
+  "https://nardandnotes.com",
+  "https://www.nardandnotes.com",
+  "http://localhost:3000",
+  "http://localhost:5173",
+];
+
 app.use(
   cors({
-    origin: process.env.FRONTEND_URL || "http://localhost:3000",
+    origin: (origin, callback) => {
+      // Allow requests without an Origin header, such as server-to-server calls.
+      if (!origin) {
+        return callback(null, true);
+      }
+
+      if (allowedOrigins.includes(origin)) {
+        return callback(null, true);
+      }
+
+      return callback(new Error("Origin not allowed by CORS."));
+    },
     methods: ["GET", "POST", "PATCH", "DELETE"],
     allowedHeaders: ["Content-Type", "Authorization"],
   })
