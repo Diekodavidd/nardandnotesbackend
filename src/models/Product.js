@@ -42,39 +42,113 @@ const productSchema = new mongoose.Schema(
     badge: { type: String, default: "" },
 
     categories: {
-      type: [{
-        type: String,
-        enum: ["For Her", "For Him", "Unisex"],
-      }],
+      type: [
+        {
+          type: String,
+          enum: ["For Her", "For Him", "Unisex"],
+        },
+      ],
       default: [],
     },
 
     imageUrl: { type: String, default: "" },
-shipping: {
-  weightGrams: {
-    type: Number,
-    required: true,
-    min: 1,
-  },
-  originCountry: {
-    type: String,
-    required: true,
-    uppercase: true,
-    trim: true,
-    minlength: 2,
-    maxlength: 2,
-  },
-  hsCode: {
-    type: String,
-    default: "",
-    trim: true,
-  },
+// Shippo shipping-cost accounting.
+// All monetary amounts are stored in integer cents.
+
+shippoRateAmountInCents: {
+  type: Number,
+  default: null,
+  min: 0,
 },
+
+shippoRateCurrency: {
+  type: String,
+  default: "",
+  uppercase: true,
+},
+
+actualShippingCostInCents: {
+  type: Number,
+  default: null,
+  min: 0,
+},
+
+actualShippingCostCurrency: {
+  type: String,
+  default: "",
+  uppercase: true,
+},
+
+storeShippingSubsidyInCents: {
+  type: Number,
+  default: null,
+  min: 0,
+},
+
+shippingLabelPurchasedAt: {
+  type: Date,
+  default: null,
+},
+
+labelPurchaseInProgress: {
+  type: Boolean,
+  default: false,
+},
+
+shippedAt: {
+  type: Date,
+  default: null,
+},
+
+deliveredAt: {
+  type: Date,
+  default: null,
+},
+    shipping: {
+      // Total packed shipping weight for one sellable unit, in grams.
+      weightGrams: {
+        type: Number,
+        required: true,
+        min: 1,
+      },
+      originCountry: {
+        type: String,
+        required: true,
+        uppercase: true,
+        trim: true,
+        minlength: 2,
+        maxlength: 2,
+      },
+      hsCode: {
+        type: String,
+        default: "",
+        trim: true,
+      },
+
+      // Actual packed dimensions for one sellable unit, in inches.
+      // Optional until existing products have been updated with measurements.
+      lengthInches: {
+        type: Number,
+        min: 0.1,
+        default: null,
+      },
+      widthInches: {
+        type: Number,
+        min: 0.1,
+        default: null,
+      },
+      heightInches: {
+        type: Number,
+        min: 0.1,
+        default: null,
+      },
+    },
 
     variants: {
       type: [variantSchema],
       validate: {
-        validator: (variants) => variants.length > 0,
+        validator: (variants) =>
+          Array.isArray(variants) && variants.length > 0,
         message: "A product must have at least one variant.",
       },
     },

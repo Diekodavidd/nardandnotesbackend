@@ -150,13 +150,39 @@ exports.handleStripeWebhook = async (req, res) => {
       });
     }
 
-    const shipping = fullSession.shipping_details || fullSession.collected_information?.shipping_details;
-    const address = shipping?.address;
-    if (!shipping?.name || !address) {
-      return res.status(400).send("Shipping details are missing.");
-    }
+const metadata = fullSession.metadata || {};
 
-    const shippingCountry = String(address.country || "").toUpperCase();
+const shippingAddress = {
+  recipientName: String(metadata.shippingRecipientName || "").trim(),
+  phone: String(metadata.shippingPhone || "").trim(),
+  line1: String(metadata.shippingLine1 || "").trim(),
+  line2: String(metadata.shippingLine2 || "").trim(),
+  city: String(metadata.shippingCity || "").trim(),
+  state: String(metadata.shippingState || "").trim(),
+  postalCode: String(metadata.shippingPostalCode || "").trim(),
+  country: String(metadata.shippingCountry || "").toUpperCase(),
+};
+
+if (
+  !shippingAddress.recipientName ||
+  !shippingAddress.phone ||
+  !shippingAddress.line1 ||
+  !shippingAddress.city ||
+  !shippingAddress.state ||
+  !shippingAddress.postalCode ||
+  shippingAddress.country !== "US"
+) {
+  console.error("Missing or invalid validated shipping address.", {
+    sessionId: fullSession.id,
+  });
+
+  return res.status(400).send("Validated shipping details are missing.");
+}
+
+    const shippingCountry = String(
+      shippingAddress.country || ""
+    ).toUpperCase();
+
     if (shippingCountry !== "US") {
       console.error("Rejected paid checkout with unsupported shipping country:", shippingCountry || "missing");
       return res.status(400).send("NARD & NOTES only ships within the United States.");
@@ -194,16 +220,7 @@ exports.handleStripeWebhook = async (req, res) => {
       taxInCents,
       totalInCents,
       currency: fullSession.currency || "usd",
-      shippingAddress: {
-        recipientName: shipping.name,
-        phone: shipping.phone || "",
-        line1: address.line1,
-        line2: address.line2 || "",
-        city: address.city,
-        state: address.state || "",
-        postalCode: address.postal_code || "",
-        country: shippingCountry,
-      },
+      shippingAddress,
       stripeCheckoutSessionId: fullSession.id,
       stripePaymentIntentId:
         typeof fullSession.payment_intent === "string"

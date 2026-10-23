@@ -15,10 +15,14 @@ const cartRoutes = require("./routes/cartRoutes");
 const orderRoutes = require("./routes/orderRoutes");
 const shippingRoutes = require("./routes/shippingRoutes");
 const promoRoutes = require("./routes/promoRoutes");
+const adminDashboardRoutes = require("./routes/adminDashboardRoutes");
 const adminOrderRoutes = require("./routes/adminOrderRoutes");
 const adminPromoRoutes = require("./routes/adminPromoRoutes");
+const adminAuthRoutes = require("./routes/adminAuthRoutes");
 const adminInventoryRoutes = require("./routes/adminInventoryRoutes");
 const stripeWebhookController = require("./controllers/stripeWebhookController");
+const adminProductRoutes = require("./routes/adminProductRoutes");
+const adminSettingsRoutes = require("./routes/adminSettingsRoutes");
 
 const app = express();
 
@@ -37,22 +41,25 @@ app.use(
   cors({
     origin: (origin, callback) => {
       // Allow requests without an Origin header, such as server-to-server calls.
-      if (!origin) {
-        return callback(null, true);
-      }
-
-      if (allowedOrigins.includes(origin)) {
+      if (!origin || allowedOrigins.includes(origin)) {
         return callback(null, true);
       }
 
       return callback(new Error("Origin not allowed by CORS."));
     },
-    methods: ["GET", "POST", "PATCH", "DELETE"],
-    allowedHeaders: ["Content-Type", "Authorization"],
+    credentials: true,
+    methods: ["GET", "HEAD", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+    allowedHeaders: [
+      "Content-Type",
+      "Authorization",
+      "x-admin-api-key",
+    ],
+    optionsSuccessStatus: 204,
   })
 );
 
 // Stripe requires the raw request body for signature verification.
+// Keep this route before express.json().
 
 app.post(
   "/api/checkout/webhook",
@@ -85,10 +92,18 @@ app.use("/api/account", accountRoutes);
 app.use("/api/orders", orderRoutes);
 app.use("/api/shipping", shippingRoutes);
 app.use("/api/promos", promoRoutes);
+app.use("/api/account/cart", cartRoutes);
+
+// Admin routes
+app.use("/api/admin/auth", adminAuthRoutes);
 app.use("/api/admin/orders", adminOrderRoutes);
 app.use("/api/admin/promos", adminPromoRoutes);
 app.use("/api/admin/inventory", adminInventoryRoutes);
-app.use("/api/account/cart", cartRoutes);
+app.use("/api/admin", adminDashboardRoutes);
+app.use("/api/admin/products", adminProductRoutes);
+app.use("/api/admin/settings", adminSettingsRoutes);
+
+// API 404 handler
 app.use((req, res) => {
   res.status(404).json({
     success: false,
@@ -96,10 +111,24 @@ app.use((req, res) => {
   });
 });
 
+// Central error handler
 app.use((error, req, res, next) => {
   console.error("API error:", error.message);
-  const status = Number.isInteger(error.status) && error.status >= 400 && error.status < 600 ? error.status : 500;
-  res.status(status).json({ success: false, message: status === 500 ? "An unexpected server error occurred." : error.message });
+
+  const status =
+    Number.isInteger(error.status) &&
+    error.status >= 400 &&
+    error.status < 600
+      ? error.status
+      : 500;
+
+  res.status(status).json({
+    success: false,
+    message:
+      status === 500
+        ? "An unexpected server error occurred."
+        : error.message,
+  });
 });
 
 async function startServer() {

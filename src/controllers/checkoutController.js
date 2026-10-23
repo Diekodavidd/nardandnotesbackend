@@ -2,7 +2,10 @@
 const Stripe = require('stripe');
 const Product = require('../models/Product');
 const { validatePromo } = require('../services/promoService');
-
+const User = require("../models/User");
+const {
+  validateShippingAddress,
+} = require("../services/shippoService");
 function stripeClient() {
   if (!process.env.STRIPE_SECRET_KEY) {
     throw Object.assign(
@@ -17,6 +20,40 @@ function stripeClient() {
 exports.createCheckoutSession = async (req, res, next) => {
   try {
     const stripe = stripeClient();
+    const shippingAddressId = String(
+  req.body.shippingAddressId || ""
+).trim();
+
+if (!shippingAddressId) {
+  return res.status(400).json({
+    success: false,
+    message: "Choose a delivery address before checkout.",
+  });
+}
+
+const user = await User.findById(req.user._id);
+
+if (!user) {
+  return res.status(404).json({
+    success: false,
+    message: "User not found.",
+  });
+}
+
+const savedAddress = user.addresses.id(shippingAddressId);
+
+if (!savedAddress) {
+  return res.status(400).json({
+    success: false,
+    message: "The selected delivery address was not found. Please choose it again.",
+  });
+}
+
+const validation = await validateShippingAddress(
+  savedAddress.toObject()
+);
+
+const shippingAddress = validation.address;
     const rawItems = req.body.items;
 
     if (
@@ -65,12 +102,15 @@ exports.createCheckoutSession = async (req, res, next) => {
         });
       }
 
-      if (product.trackInventory && variant.stock < quantity) {
-        return res.status(400).json({
-          success: false,
-          message: `${product.name} does not have enough stock.`,
-        });
-      }
+if (
+  product.trackInventory !== false &&
+  (Number(variant.stock) || 0) < quantity
+) {
+  return res.status(409).json({
+    success: false,
+    message: `${product.name} (${variant.size}) does not have enough stock.`,
+  });
+}        
 
       subtotal += variant.priceInCents * quantity;
 
@@ -123,12 +163,22 @@ exports.createCheckoutSession = async (req, res, next) => {
       client_reference_id: String(req.user._id),
 
       metadata: {
-        userId: String(req.user._id),
-        subtotalInCents: String(subtotal),
-        discountCode: promo?.code || '',
-        shippingProvider: 'Standard shipping',
-        shippingRateId: '',
-      },
+  userId: String(req.user._id),
+  subtotalInCents: String(subtotal),
+  discountCode: promo?.code || "",
+  shippingProvider: "Standard shipping",
+  shippingRateId: "",
+
+  // Snapshot the validated address for the eventual order.
+  shippingRecipientName: shippingAddress.recipientName,
+  shippingPhone: shippingAddress.phone,
+  shippingLine1: shippingAddress.line1,
+  shippingLine2: shippingAddress.line2 || "",
+  shippingCity: shippingAddress.city,
+  shippingState: shippingAddress.state,
+  shippingPostalCode: shippingAddress.postalCode,
+  shippingCountry: "US",
+},
 
       line_items: lineItems,
 
@@ -138,10 +188,7 @@ exports.createCheckoutSession = async (req, res, next) => {
         enabled: true,
       },
 
-      // US delivery only.
-      shipping_address_collection: {
-        allowed_countries: ['US'],
-      },
+     
 
       shipping_options: [
         {

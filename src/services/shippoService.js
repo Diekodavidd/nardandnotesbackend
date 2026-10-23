@@ -209,7 +209,15 @@ async function getRates({ addressTo, parcel, customsItems = [] }) {
     addressTo.phone,
     destinationCountry
   );
-
+console.log("[Shippo recipient phone validation]", {
+  country: destinationCountry,
+  phone: JSON.stringify(addressTo.phone),
+  phoneType: typeof addressTo.phone,
+  normalizedPhone: normalizeShippingPhone(
+    addressTo.phone,
+    destinationCountry
+  ),
+});
   if (!normalizedPhone) {
     const error = new Error(
       "Enter a valid recipient phone number for the selected delivery country."
@@ -369,7 +377,19 @@ async function getRate(rateId) {
     `/rates/${encodeURIComponent(rateId)}/`
   );
 }
+async function getShipment(shipmentId) {
+  if (!shipmentId) {
+    const error = new Error(
+      "A valid Shippo shipment ID is required."
+    );
+    error.status = 400;
+    throw error;
+  }
 
+  return shippoRequest(
+    `/shipments/${encodeURIComponent(shipmentId)}/`
+  );
+}
 async function purchaseLabel(rateId) {
   if (!rateId) {
     const error = new Error("A valid Shippo rate ID is required.");
@@ -386,9 +406,105 @@ async function purchaseLabel(rateId) {
     }),
   });
 }
+async function validateShippingAddress(address) {
+  if (!address || typeof address !== "object") {
+    throw Object.assign(
+      new Error("A shipping address is required."),
+      { status: 400 }
+    );
+  }
 
+  const country = String(address.country || "US").trim().toUpperCase();
+
+  if (
+    country !== "US" ||
+    !address.line1 ||
+    !address.city ||
+    !address.state ||
+    !address.postalCode
+  ) {
+    throw Object.assign(
+      new Error("Enter a complete US shipping address."),
+      { status: 400 }
+    );
+  }
+
+  const payload = {
+    name: String(address.recipientName || "").trim(),
+    street1: String(address.line1 || "").trim(),
+    street2: String(address.line2 || "").trim(),
+    city: String(address.city || "").trim(),
+    state: String(address.state || "").trim(),
+    zip: String(address.postalCode || "").trim(),
+    country: "US",
+    phone: normalizeShippingPhone(address.phone, "US"),
+    validate: true,
+  };
+
+  if (!payload.name || !payload.phone) {
+    throw Object.assign(
+      new Error("Enter a recipient name and valid US phone number."),
+      { status: 400 }
+    );
+  }
+
+  const result = await shippoRequest("/addresses/", {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+
+  const validation = result.validation_results;
+
+  // Fail closed if Shippo did not return a usable validation result.
+  if (!validation || typeof validation.is_valid !== "boolean") {
+    console.error("[Shippo address validation response incomplete]", {
+      addressId: result.object_id || null,
+      validationResults: validation || null,
+    });
+
+    throw Object.assign(
+      new Error("We couldn't confirm this address. Please try again."),
+      { status: 502 }
+    );
+  }
+
+  if (!validation.is_valid) {
+    const messages = Array.isArray(validation.messages)
+      ? validation.messages
+          .map((item) => item.text || item.message || "")
+          .filter(Boolean)
+      : [];
+
+    throw Object.assign(
+      new Error(
+        messages.length
+          ? `Please correct your shipping address: ${messages.join(" ")}`
+          : "Shippo could not validate this address. Check the street, city, state and ZIP code."
+      ),
+      { status: 422, addressValidation: true }
+    );
+  }
+
+  return {
+    valid: true,
+    addressId: result.object_id || null,
+    address: {
+      recipientName: payload.name,
+      phone: payload.phone,
+      line1: payload.street1,
+      line2: payload.street2,
+      city: payload.city,
+      state: payload.state,
+      postalCode: payload.zip,
+      country: "US",
+    },
+    validationResults: validation,
+  };
+}
 module.exports = {
   getRates,
   getRate,
+  getShipment,
   purchaseLabel,
+  validateShippingAddress,
 };

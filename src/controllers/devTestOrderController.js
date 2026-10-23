@@ -1,9 +1,14 @@
-
 const Order = require('../models/Order');
 const Product = require('../models/Product');
 const User = require('../models/User');
 const { sendOrderConfirmation } = require('../services/orderEmailService');
-const { getRates, getRate, purchaseLabel } = require('../services/shippoService');
+const {
+  getRates,
+  getRate,
+  purchaseLabel,
+} = require('../services/shippoService');
+
+const { clearPurchasedCart } = require("../services/clearPurchasedCart");
 
 function ensureDevTestingEnabled() {
   if (
@@ -144,7 +149,9 @@ async function buildTestCustomsItems(requestedItems, destinationCountry) {
     }
 
     if (!Number.isInteger(priceInCents) || priceInCents <= 0) {
-      const error = new Error(`Invalid price for shipping test item: ${sku}`);
+      const error = new Error(
+        `Invalid price for shipping test item: ${sku}`
+      );
       error.status = 400;
       throw error;
     }
@@ -168,7 +175,8 @@ async function buildTestCustomsItems(requestedItems, destinationCountry) {
 }
 
 // POST /api/dev-test-orders/rates
-// Shippo rate lookup for testing only; this does not set checkout shipping prices.
+// Shippo rate lookup for testing only.
+// This does not set checkout shipping prices.
 exports.getTestShippingRates = async (req, res, next) => {
   try {
     ensureDevTestingEnabled();
@@ -309,7 +317,7 @@ exports.createTestShippingLabel = async (req, res, next) => {
 };
 
 // POST /api/dev-test-orders
-// Creates a cancelled, unpaid test order. No inventory is deducted.
+// Creates a development test order without deducting inventory.
 exports.createTestOrder = async (req, res, next) => {
   try {
     ensureDevTestingEnabled();
@@ -403,16 +411,17 @@ exports.createTestOrder = async (req, res, next) => {
       });
     }
 
-    // Fixed shipping policy, based on merchandise subtotal before discounts.
+    // Fixed shipping policy based on merchandise subtotal before discounts.
     const shippingInCents = subtotalInCents >= 10000 ? 0 : 599;
+
     const shippingProvider = 'Standard shipping';
+
     const shippingService =
       shippingInCents === 0
         ? 'Standard shipping (free)'
         : 'Standard shipping';
 
-    const now = Date.now();
-    const orderNumber = `TEST-NN-${now}`;
+    const orderNumber = `TEST-NN-${Date.now()}`;
 
     const order = await Order.create({
       user: user._id,
@@ -425,18 +434,34 @@ exports.createTestOrder = async (req, res, next) => {
       totalInCents: subtotalInCents + shippingInCents,
       currency: 'usd',
       shippingAddress: address,
-      stripeCheckoutSessionId: `DEV_TEST_${now}`,
-      paymentStatus: 'pending',
-      status: 'cancelled',
+
+      // Simulated payment for development workflow testing.
+      // This does NOT represent a real Stripe payment.
+      stripeCheckoutSessionId: null,
+      stripePaymentIntentId: null,
+      paymentStatus: 'paid',
+      status: 'processing',
       testMode: true,
-      shippingProvider,
+      paidAt: new Date(),
+
+      shippingProvider: '',
+      shippoShipmentId: '',
       shippoRateId: '',
+      shippoTransactionId: '',
+      labelUrl: '',
+      trackingNumber: '',
+      trackingUrl: '',
+
       emailStatus: 'pending',
+
       statusHistory: [
         {
-          status: 'cancelled',
-          note:
-            'Development-only test order. No payment was taken; do not fulfil.',
+          status: 'pending',
+          note: 'Development test order created for checkout and shipping workflow testing.',
+        },
+        {
+          status: 'processing',
+          note: 'Order is available for admin fulfilment workflow testing. No live payment was processed.',
         },
       ],
     });
@@ -483,11 +508,21 @@ exports.createTestOrder = async (req, res, next) => {
       });
     }
 
+    // Remove purchased quantities from the customer's saved cart.
+    try {
+      await clearPurchasedCart(user._id, order.items);
+    } catch (cleanupError) {
+      console.error(
+        "Development test-order cart cleanup failed:",
+        cleanupError.message
+      );
+    }
+
+
     return res.status(201).json({
       success: true,
       testOnly: true,
-      message:
-        'Unpaid development test order created. It is cancelled and must not be fulfilled.',
+      message: 'Development test order created successfully.',
       order: {
         id: order._id,
         orderNumber: order.orderNumber,

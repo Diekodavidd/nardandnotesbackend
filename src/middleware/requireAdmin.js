@@ -1,16 +1,35 @@
-// Protect operational endpoints with a separate server-side secret.
-// Configure ADMIN_API_KEY in the hosting provider; never expose it to the browser.
-const crypto = require('node:crypto');
+
+const crypto = require("crypto");
+const { verifySession } = require("../controllers/adminAuthController");
+
+function safeEqual(a, b) {
+  const left = Buffer.from(String(a || ""));
+  const right = Buffer.from(String(b || ""));
+
+  return left.length === right.length &&
+    crypto.timingSafeEqual(left, right);
+}
+
 module.exports = function requireAdmin(req, res, next) {
+  // Browser dashboard authentication.
+  if (verifySession(req)) {
+    return next();
+  }
+
+  // Preserve existing API-key authentication.
   const expected = process.env.ADMIN_API_KEY;
-  const supplied = req.get('x-admin-api-key') || '';
-  if (!expected || !supplied) {
-    return res.status(503).json({ success: false, message: 'Admin API is not configured.' });
+  const supplied = req.headers["x-admin-api-key"];
+
+  if (
+    expected &&
+    typeof supplied === "string" &&
+    safeEqual(supplied, expected)
+  ) {
+    return next();
   }
-  const a = Buffer.from(expected);
-  const b = Buffer.from(supplied);
-  if (a.length !== b.length || !crypto.timingSafeEqual(a, b)) {
-    return res.status(401).json({ success: false, message: 'Not authorised.' });
-  }
-  next();
+
+  return res.status(401).json({
+    success: false,
+    message: "Admin authentication required.",
+  });
 };

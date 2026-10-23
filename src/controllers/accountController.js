@@ -1,9 +1,11 @@
 const bcrypt = require('bcryptjs');
 const User = require('../models/User');
 const Product = require('../models/Product');
-
+const { parsePhoneNumberFromString } = require("libphonenumber-js");
 const Order = require('../models/Order');
-
+const {
+  validateShippingAddress,
+} = require("../services/shippoService");
 
 function safeUser(user) {
   if (!user) return null;
@@ -140,18 +142,33 @@ exports.updateProfile = async (req, res, next) => {
       }
     }
 
-    if (body.phone !== undefined) {
-      const phone = String(body.phone).trim();
+    
+if (body.phone !== undefined) {
+  const rawPhone = String(body.phone).trim();
 
-      if (phone.length > 30) {
-        return res.status(400).json({
-          success: false,
-          message: "Phone number cannot exceed 30 characters.",
-        });
-      }
+  // Allow users to leave their profile phone number empty.
+  if (!rawPhone) {
+    user.phone = "";
+  } else {
+    // Treat numbers without a country code as US numbers.
+    const phoneNumber = parsePhoneNumberFromString(rawPhone, "US");
 
-      user.phone = phone;
+    if (
+      !phoneNumber ||
+      !phoneNumber.isValid() ||
+      phoneNumber.country !== "US"
+    ) {
+      return res.status(400).json({
+        success: false,
+        message:
+          "Enter a valid US phone number, e.g. (212) 555-0123 or +1 212 555 0123.",
+      });
     }
+
+    // Store in E.164 format for consistent use with Shippo.
+    user.phone = phoneNumber.format("E.164");
+  }
+}
 
     if (body.gender !== undefined) {
       const allowedGenders = [
@@ -518,27 +535,91 @@ exports.listAddresses = async (req, res, next) => {
 exports.createAddress = async (req, res, next) => {
   try {
     const user = await User.findById(req.user._id);
+
+    if (!user) {
+      return res.status(404).json({
+        success: false,
+        message: "User not found.",
+      });
+    }
+
     const address = cleanAddress(req.body);
+
     if (!user.addresses) user.addresses = [];
-    if (address.isDefault || user.addresses.length === 0) user.addresses.forEach((item) => { item.isDefault = false; });
-    if (user.addresses.length >= 10) return res.status(400).json({ success: false, message: 'You can save up to 10 addresses.' });
+
+    if (user.addresses.length >= 10) {
+      return res.status(400).json({
+        success: false,
+        message: "You can save up to 10 addresses.",
+      });
+    }
+
+    // Validate before saving.
+    const validation = await validateShippingAddress(address);
+    Object.assign(address, validation.address);
+
+    if (address.isDefault || user.addresses.length === 0) {
+      user.addresses.forEach((item) => {
+        item.isDefault = false;
+      });
+    }
+
     user.addresses.push(address);
     await user.save();
-    res.status(201).json({ success: true, addresses: user.addresses });
-  } catch (error) { next(error); }
+
+    return res.status(201).json({
+      success: true,
+      message: "Address validated and saved.",
+      addresses: user.addresses,
+    });
+  } catch (error) {
+    next(error);
+  }
 };
 
 exports.updateAddress = async (req, res, next) => {
   try {
     const user = await User.findById(req.user._id);
+
+    if (!user) {
+      return res.status(404).json({
+        success: false,
+        message: "User not found.",
+      });
+    }
+
     const address = user.addresses.id(req.params.addressId);
-    if (!address) return res.status(404).json({ success: false, message: 'Address not found.' });
+
+    if (!address) {
+      return res.status(404).json({
+        success: false,
+        message: "Address not found.",
+      });
+    }
+
     const clean = cleanAddress(req.body);
-    if (clean.isDefault) user.addresses.forEach((item) => { item.isDefault = false; });
+
+    // Do not update the saved address unless validation succeeds.
+    const validation = await validateShippingAddress(clean);
+    Object.assign(clean, validation.address);
+
+    if (clean.isDefault) {
+      user.addresses.forEach((item) => {
+        item.isDefault = false;
+      });
+    }
+
     Object.assign(address, clean);
     await user.save();
-    res.json({ success: true, addresses: user.addresses });
-  } catch (error) { next(error); }
+
+    return res.json({
+      success: true,
+      message: "Address validated and updated.",
+      addresses: user.addresses,
+    });
+  } catch (error) {
+    next(error);
+  }
 };
 
 exports.deleteAddress = async (req, res, next) => {

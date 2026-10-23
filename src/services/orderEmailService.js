@@ -1,4 +1,3 @@
-
 const { Resend } = require("resend");
 
 const resend = process.env.RESEND_API_KEY
@@ -22,7 +21,6 @@ function money(cents = 0) {
   }).format(cents / 100);
 }
 
-
 async function sendOrderConfirmation(order, email) {
   if (!resend || !process.env.EMAIL_FROM) {
     return { sent: false, reason: "not_configured" };
@@ -32,7 +30,6 @@ async function sendOrderConfirmation(order, email) {
     process.env.FRONTEND_URL || "http://localhost:3000"
   ).replace(/\/+$/, "");
 
-  const isTest = Boolean(order.testMode);
   const currency = String(order.currency || "usd").toUpperCase();
 
   function formatAmount(cents = 0) {
@@ -61,6 +58,7 @@ async function sendOrderConfirmation(order, email) {
   `).join("");
 
   const address = order.shippingAddress || {};
+
   const addressHtml = [
     address.recipientName,
     address.line1,
@@ -73,22 +71,6 @@ async function sendOrderConfirmation(order, email) {
     .filter(Boolean)
     .map((line) => `<div>${escapeHtml(line)}</div>`)
     .join("");
-
-  const testNotice = isTest ? `
-    <tr>
-      <td style="padding:0 30px 24px;">
-        <div style="background:#f5f0e5;border:1px solid #e5dac1;
-          padding:16px;color:#6f5b35;font-size:13px;line-height:1.7;">
-          <strong style="display:block;margin-bottom:4px;
-            letter-spacing:1px;font-size:11px;">
-            DEVELOPMENT TEST ORDER
-          </strong>
-          No payment was collected. This order is for testing only
-          and will not be fulfilled or shipped.
-        </div>
-      </td>
-    </tr>
-  ` : "";
 
   const buttonUrl = `${frontendUrl}/account/orders`;
 
@@ -111,12 +93,15 @@ async function sendOrderConfirmation(order, email) {
                       color:#91794b;margin-bottom:17px;">
                       THE ART OF PERSONAL FRAGRANCE
                     </div>
+
                     <div style="font-family:Georgia,'Times New Roman',serif;
                       font-size:29px;letter-spacing:4px;font-weight:bold;">
                       NARD &amp; NOTES
                     </div>
+
                     <div style="width:42px;height:1px;background:#b69a60;
                       margin:20px auto 13px;"></div>
+
                     <div style="font-size:10px;letter-spacing:2px;
                       color:#81796c;">
                       A MORE INTENTIONAL YOU
@@ -129,20 +114,20 @@ async function sendOrderConfirmation(order, email) {
                     background:#292720;color:#fff;">
                     <div style="font-size:10px;letter-spacing:2px;
                       color:#d2bd8b;margin-bottom:13px;">
-                      ${isTest ? "YOUR TEST ORDER" : "ORDER CONFIRMATION"}
+                      ORDER CONFIRMATION
                     </div>
+
                     <div style="font-family:Georgia,'Times New Roman',serif;
                       font-size:30px;line-height:1.3;margin-bottom:12px;">
                       A beautiful choice.
                     </div>
+
                     <div style="font-size:14px;line-height:1.8;color:#e4e0d8;">
                       Thank you for choosing NARD &amp; NOTES.
                       Your order details are below.
                     </div>
                   </td>
                 </tr>
-
-                ${testNotice}
 
                 <tr>
                   <td style="padding:26px 30px 12px;">
@@ -158,13 +143,13 @@ async function sendOrderConfirmation(order, email) {
                             ${escapeHtml(order.orderNumber)}
                           </div>
                         </td>
+
                         <td align="right">
                           <div style="font-size:10px;letter-spacing:1.5px;
                             color:#8a806f;margin-bottom:7px;">
                             TOTAL
                           </div>
-                          <div style="font-family:Georgia,serif;
-                            font-size:23px;">
+                          <div style="font-family:Georgia,serif;font-size:23px;">
                             ${formatAmount(order.totalInCents)}
                           </div>
                         </td>
@@ -194,6 +179,7 @@ async function sendOrderConfirmation(order, email) {
                           ${formatAmount(order.subtotalInCents)}
                         </td>
                       </tr>
+
                       <tr>
                         <td style="padding:6px 0;color:#777064;font-size:13px;">
                           Shipping
@@ -202,6 +188,7 @@ async function sendOrderConfirmation(order, email) {
                           ${formatAmount(order.shippingInCents)}
                         </td>
                       </tr>
+
                       ${Number(order.discountInCents || 0) > 0 ? `
                         <tr>
                           <td style="padding:6px 0;color:#777064;font-size:13px;">
@@ -212,6 +199,7 @@ async function sendOrderConfirmation(order, email) {
                           </td>
                         </tr>
                       ` : ""}
+
                       <tr>
                         <td style="border-top:1px solid #e8e2d8;padding-top:16px;
                           font-family:Georgia,serif;font-size:19px;">
@@ -232,6 +220,7 @@ async function sendOrderConfirmation(order, email) {
                       color:#8a806f;margin-bottom:12px;">
                       DELIVERY ADDRESS
                     </div>
+
                     <div style="font-size:13px;line-height:1.9;color:#514c43;">
                       ${addressHtml}
                     </div>
@@ -256,6 +245,7 @@ async function sendOrderConfirmation(order, email) {
                       margin-bottom:9px;">
                       With care, NARD &amp; NOTES
                     </div>
+
                     <div style="font-size:10px;letter-spacing:2px;
                       color:#8a806f;">
                       FRAGRANCES FOR A MORE INTENTIONAL YOU
@@ -275,14 +265,13 @@ async function sendOrderConfirmation(order, email) {
     const { data, error } = await resend.emails.send({
       from: process.env.EMAIL_FROM,
       to: [email],
-      subject: isTest
-        ? `TEST ORDER ${order.orderNumber} — NARD & NOTES`
-        : `Your NARD & NOTES order ${order.orderNumber}`,
+      subject: `Your NARD & NOTES order ${order.orderNumber}`,
       html,
     });
 
     if (error) {
       console.error("Resend order email error:", error);
+
       return {
         sent: false,
         reason: "failed",
@@ -293,6 +282,7 @@ async function sendOrderConfirmation(order, email) {
     return { sent: true, id: data?.id };
   } catch (error) {
     console.error("Resend order email error:", error.message);
+
     return {
       sent: false,
       reason: "failed",
@@ -300,7 +290,6 @@ async function sendOrderConfirmation(order, email) {
     };
   }
 }
-
 
 async function sendShippingUpdate(order, email) {
   if (!resend || !process.env.EMAIL_FROM) {
@@ -316,16 +305,19 @@ async function sendShippingUpdate(order, email) {
         <h1>NARD &amp; NOTES</h1>
         <h2>Your order is on its way.</h2>
         <p>Order <strong>${escapeHtml(order.orderNumber)}</strong> has shipped.</p>
+
         ${
           order.trackingNumber
             ? `<p>Tracking number: <strong>${escapeHtml(order.trackingNumber)}</strong></p>`
             : ""
         }
+
         ${
           order.trackingUrl
             ? `<p><a href="${escapeHtml(order.trackingUrl)}">Track your delivery</a></p>`
             : ""
         }
+
         <p>Thank you for choosing NARD &amp; NOTES.</p>
       </div>
     `,
@@ -341,6 +333,5 @@ async function sendShippingUpdate(order, email) {
 
 module.exports = {
   sendOrderConfirmation,
-  sendShippingUpdate
+  sendShippingUpdate,
 };
-
