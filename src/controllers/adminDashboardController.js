@@ -1,4 +1,3 @@
-
 const mongoose = require("mongoose");
 const Order = require("../models/Order");
 const User = require("../models/User");
@@ -23,7 +22,7 @@ function pagination(query) {
   const page = Math.max(1, Number.parseInt(query.page, 10) || 1);
   const limit = Math.min(
     100,
-    Math.max(1, Number.parseInt(query.limit, 10) || 25)
+    Math.max(1, Number.parseInt(query.limit, 10) || 25),
   );
 
   return { page, limit, skip: (page - 1) * limit };
@@ -33,11 +32,7 @@ function pagination(query) {
 exports.overview = async (req, res, next) => {
   try {
     const now = new Date();
-    const monthStart = new Date(
-      now.getFullYear(),
-      now.getMonth(),
-      1
-    );
+    const monthStart = new Date(now.getFullYear(), now.getMonth(), 1);
 
     const [
       totalOrders,
@@ -128,7 +123,7 @@ exports.overview = async (req, res, next) => {
     ]);
 
     const statusCounts = Object.fromEntries(
-      fulfilmentCounts.map((item) => [item._id, item.count])
+      fulfilmentCounts.map((item) => [item._id, item.count]),
     );
 
     return res.json({
@@ -156,7 +151,7 @@ exports.overview = async (req, res, next) => {
   }
 };
 
-// GET /api/admin/customers
+/* GET /api/admin/customers */
 exports.listCustomers = async (req, res, next) => {
   try {
     const { page, limit, skip } = pagination(req.query);
@@ -185,55 +180,81 @@ exports.listCustomers = async (req, res, next) => {
         .skip(skip)
         .limit(limit)
         .lean(),
-
       User.countDocuments(filter),
     ]);
 
     const customerIds = customers.map((customer) => customer._id);
 
-    const summaries = await Order.aggregate([
-      {
-        $match: {
-          user: { $in: customerIds },
-          testMode: { $ne: true },
-        },
-      },
-      {
-        $group: {
-          _id: "$user",
-          orderCount: { $sum: 1 },
-          paidOrderCount: {
-            $sum: {
-              $cond: [{ $eq: ["$paymentStatus", "paid"] }, 1, 0],
+    const summaries = customerIds.length
+      ? await Order.aggregate([
+          {
+            $match: {
+              user: { $in: customerIds },
             },
           },
-          paidTotals: {
-            $push: {
-              $cond: [
-                { $eq: ["$paymentStatus", "paid"] },
-                { currency: "$currency", total: "$totalInCents" },
-                null,
-              ],
+          {
+            $group: {
+              _id: "$user",
+              orderCount: { $sum: 1 },
+              paidOrderCount: {
+                $sum: {
+                  $cond: [{ $eq: ["$paymentStatus", "paid"] }, 1, 0],
+                },
+              },
+              paidTotals: {
+                $push: {
+                  $cond: [
+                    { $eq: ["$paymentStatus", "paid"] },
+                    {
+                      currency: { $toUpper: { $ifNull: ["$currency", "usd"] } },
+                      totalInCents: { $ifNull: ["$totalInCents", 0] },
+                    },
+                    null,
+                  ],
+                },
+              },
+              lastOrderAt: { $max: "$createdAt" },
             },
           },
-          lastOrderAt: { $max: "$createdAt" },
-        },
-      },
-    ]);
+        ])
+      : [];
 
     const summaryById = new Map(
-      summaries.map((item) => [String(item._id), item])
+      summaries.map((summary) => [String(summary._id), summary]),
     );
 
     const result = customers.map((customer) => {
       const summary = summaryById.get(String(customer._id));
+      const paidTotals = (summary?.paidTotals || []).filter(Boolean);
+
+      // Preserve currency separation: never add USD cents to GBP or NGN.
+      const totalsByCurrency = paidTotals.reduce((totals, item) => {
+        const currency = String(item.currency || "USD").toUpperCase();
+        totals[currency] =
+          (totals[currency] || 0) + Number(item.totalInCents || 0);
+        return totals;
+      }, {});
+
+      const currencies = Object.keys(totalsByCurrency);
 
       return {
         ...customer,
         orderCount: summary?.orderCount || 0,
         paidOrderCount: summary?.paidOrderCount || 0,
-        paidTotals: (summary?.paidTotals || []).filter(Boolean),
+        paidTotals,
+        totalsByCurrency,
+        // Compatibility fields for UIs expecting a single spending value.
+        // Only populated when there is one currency.
+        currency: currencies.length === 1 ? currencies[0] : null,
+        totalSpentInCents:
+          currencies.length === 1 ? totalsByCurrency[currencies[0]] : null,
         lastOrderAt: summary?.lastOrderAt || null,
+        customerType:
+          (summary?.orderCount || 0) === 0
+            ? "registered"
+            : (summary?.orderCount || 0) > 1
+              ? "returning"
+              : "first-time",
       };
     });
 
@@ -250,7 +271,7 @@ exports.listCustomers = async (req, res, next) => {
   }
 };
 
-// GET /api/admin/customers/:id
+/* GET /api/admin/customers/:id */
 exports.customerDetails = async (req, res, next) => {
   try {
     if (!mongoose.isValidObjectId(req.params.id)) {
@@ -273,29 +294,37 @@ exports.customerDetails = async (req, res, next) => {
 
     const orders = await Order.find({
       user: customer._id,
-      testMode: { $ne: true },
     })
       .sort({ createdAt: -1 })
       .limit(50)
       .lean();
 
-    const paidTotalsByCurrency = {};
+    const totalsByCurrency = {};
+    let paidOrderCount = 0;
 
     for (const order of orders) {
       if (order.paymentStatus !== "paid") continue;
 
+      paidOrderCount += 1;
       const currency = String(order.currency || "usd").toUpperCase();
-      paidTotalsByCurrency[currency] =
-        (paidTotalsByCurrency[currency] || 0) +
-        Number(order.totalInCents || 0);
+
+      totalsByCurrency[currency] =
+        (totalsByCurrency[currency] || 0) + Number(order.totalInCents || 0);
     }
 
     return res.json({
       success: true,
-      customer,
+      customer: {
+        ...customer,
+        orderCount: orders.length,
+        paidOrderCount,
+        totalsByCurrency,
+        lastOrderAt: orders[0]?.createdAt || null,
+      },
       orders,
       orderCount: orders.length,
-      paidTotalsByCurrency,
+      paidOrderCount,
+      totalsByCurrency,
     });
   } catch (error) {
     next(error);
@@ -355,7 +384,9 @@ exports.updateFulfilmentStatus = async (req, res, next) => {
   try {
     const { orderId } = req.params;
     const status = String(req.body?.status || "").toLowerCase();
-    const note = String(req.body?.note || "").trim().slice(0, 500);
+    const note = String(req.body?.note || "")
+      .trim()
+      .slice(0, 500);
 
     if (!mongoose.isValidObjectId(orderId)) {
       return res.status(400).json({
@@ -404,7 +435,8 @@ exports.updateFulfilmentStatus = async (req, res, next) => {
     if (status === "shipped" && !order.shippoTransactionId) {
       return res.status(409).json({
         success: false,
-        message: "Purchase the shipping label before marking this order shipped.",
+        message:
+          "Purchase the shipping label before marking this order shipped.",
       });
     }
 
@@ -446,12 +478,11 @@ exports.updateFulfilmentStatus = async (req, res, next) => {
 
 // GET /api/admin/inventory
 
-
 exports.inventoryOverview = async (req, res, next) => {
   try {
     const products = await Product.find({})
       .select(
-        "name slug type imageUrl variants trackInventory updatedAt active"
+        "name slug type imageUrl variants trackInventory updatedAt active",
       )
       .lean();
 
@@ -483,7 +514,7 @@ exports.inventoryOverview = async (req, res, next) => {
                 ? "low_stock"
                 : "in_stock",
         };
-      })
+      }),
     );
 
     return res.status(200).json({
@@ -494,7 +525,7 @@ exports.inventoryOverview = async (req, res, next) => {
         variantCount: inventory.length,
         inStockCount: inventory.filter((item) => item.stock > threshold).length,
         lowStockCount: inventory.filter(
-          (item) => item.stock > 0 && item.stock <= 10
+          (item) => item.stock > 0 && item.stock <= 10,
         ).length,
         outOfStockCount: inventory.filter((item) => item.stock <= 0).length,
       },
@@ -504,11 +535,11 @@ exports.inventoryOverview = async (req, res, next) => {
   }
 };
 
-
 // GET /api/admin/analytics?from=2026-10-01&to=2026-10-22
 exports.analytics = async (req, res, next) => {
   try {
     const now = new Date();
+
     const defaultFrom = new Date(now);
     defaultFrom.setDate(defaultFrom.getDate() - 29);
     defaultFrom.setHours(0, 0, 0, 0);
@@ -529,61 +560,125 @@ exports.analytics = async (req, res, next) => {
 
     const match = {
       paymentStatus: "paid",
-      testMode: { $ne: true },
-      paidAt: { $gte: from, $lt: endExclusive },
+      paidAt: {
+        $gte: from,
+        $lt: endExclusive,
+      },
     };
 
-    const [dailySales, totals, bestSellers] = await Promise.all([
-      Order.aggregate([
-        { $match: match },
-        {
-          $group: {
-            _id: {
-              date: {
-                $dateToString: {
-                  format: "%Y-%m-%d",
-                  date: "$paidAt",
+    const [dailySales, totals, bestSellers, ordersByStatus] = await Promise.all(
+      [
+        // Daily revenue and order counts
+        Order.aggregate([
+          { $match: match },
+          {
+            $group: {
+              _id: {
+                date: {
+                  $dateToString: {
+                    format: "%Y-%m-%d",
+                    date: "$paidAt",
+                  },
                 },
+                currency: "$currency",
               },
-              currency: "$currency",
+              revenueInCents: {
+                $sum: "$totalInCents",
+              },
+              orderCount: {
+                $sum: 1,
+              },
             },
-            revenueInCents: { $sum: "$totalInCents" },
-            orderCount: { $sum: 1 },
           },
-        },
-        { $sort: { "_id.date": 1 } },
-      ]),
-
-      Order.aggregate([
-        { $match: match },
-        {
-          $group: {
-            _id: "$currency",
-            revenueInCents: { $sum: "$totalInCents" },
-            orderCount: { $sum: 1 },
-            averageOrderInCents: { $avg: "$totalInCents" },
-          },
-        },
-      ]),
-
-      Order.aggregate([
-        { $match: match },
-        { $unwind: "$items" },
-        {
-          $group: {
-            _id: {
-              sku: "$items.sku",
-              name: "$items.name",
-              size: "$items.size",
+          {
+            $sort: {
+              "_id.date": 1,
             },
-            quantitySold: { $sum: "$items.quantity" },
-            revenueInCents: { $sum: "$items.lineTotalInCents" },
           },
-        },
-        { $sort: { quantitySold: -1 } },
-        { $limit: 10 },
-      ]),
-    ]);
+        ]),
+
+        // Revenue totals by currency
+        Order.aggregate([
+          { $match: match },
+          {
+            $group: {
+              _id: "$currency",
+              revenueInCents: {
+                $sum: "$totalInCents",
+              },
+              orderCount: {
+                $sum: 1,
+              },
+              averageOrderInCents: {
+                $avg: "$totalInCents",
+              },
+            },
+          },
+        ]),
+        // Best-selling products, including their saved images
+        Order.aggregate([
+          { $match: match },
+
+          // Prefer the most recently paid matching item when
+          // selecting the representative image and slug.
+          { $sort: { paidAt: -1 } },
+
+          { $unwind: "$items" },
+
+          {
+            $group: {
+              _id: {
+                sku: "$items.sku",
+                name: "$items.name",
+                size: "$items.size",
+              },
+
+              // Product details saved in the order item
+              imageUrl: {
+                $first: "$items.imageUrl",
+              },
+              slug: {
+                $first: "$items.slug",
+              },
+
+              quantitySold: {
+                $sum: "$items.quantity",
+              },
+              revenueInCents: {
+                $sum: "$items.lineTotalInCents",
+              },
+            },
+          },
+
+          {
+            $project: {
+              _id: 0,
+              sku: "$_id.sku",
+              name: "$_id.name",
+              size: "$_id.size",
+              imageUrl: 1,
+              slug: 1,
+              quantitySold: 1,
+              revenueInCents: 1,
+            },
+          },
+
+          { $sort: { quantitySold: -1 } },
+          { $limit: 10 },
+        ]),
+        // Orders grouped by fulfilment status
+        Order.aggregate([
+          { $match: match },
+          {
+            $group: {
+              _id: "$status",
+              count: { $sum: 1 },
+            },
+          },
+        ]),
+        
+      ],
+    );
 
     return res.json({
       success: true,
@@ -591,6 +686,7 @@ exports.analytics = async (req, res, next) => {
       totalsByCurrency: totals,
       dailySales,
       bestSellers,
+      ordersByStatus,
     });
   } catch (error) {
     next(error);

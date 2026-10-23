@@ -1,3 +1,4 @@
+const mongoose = require("mongoose");
 const Stripe = require("stripe");
 const Order = require("../models/Order");
 const Product = require("../models/Product");
@@ -53,7 +54,7 @@ exports.handleStripeWebhook = async (req, res) => {
     event = stripe.webhooks.constructEvent(
       req.body,
       signature,
-      process.env.STRIPE_WEBHOOK_SECRET
+      process.env.STRIPE_WEBHOOK_SECRET,
     );
   } catch (error) {
     console.error("Stripe signature verification failed:", error.message);
@@ -86,11 +87,16 @@ exports.handleStripeWebhook = async (req, res) => {
         existingOrder.status !== "cancelled" &&
         existingOrder.emailStatus !== "sent"
       ) {
-        const existingUser = await User.findById(existingOrder.user).select("email");
+        const existingUser = await User.findById(existingOrder.user).select(
+          "email",
+        );
         if (existingUser?.email) {
           await attemptOrderConfirmation(existingOrder, existingUser.email);
         } else {
-          console.error("Cannot retry order email: customer email not found.", existingOrder.orderNumber);
+          console.error(
+            "Cannot retry order email: customer email not found.",
+            existingOrder.orderNumber,
+          );
         }
       }
 
@@ -118,7 +124,8 @@ exports.handleStripeWebhook = async (req, res) => {
       expand: ["line_items.data.price.product"],
     });
     const stripeItems = fullSession.line_items?.data || [];
-    if (!stripeItems.length) return res.status(400).send("Checkout contains no items.");
+    if (!stripeItems.length)
+      return res.status(400).send("Checkout contains no items.");
 
     const items = [];
     for (const line of stripeItems) {
@@ -130,8 +137,13 @@ exports.handleStripeWebhook = async (req, res) => {
         return res.status(400).send("Invalid Stripe line item.");
       }
 
-      const product = await Product.findOne({ "variants.sku": sku, active: true });
-      const variant = product?.variants?.find((item) => item.sku === sku && item.active);
+      const product = await Product.findOne({
+        "variants.sku": sku,
+        active: true,
+      });
+      const variant = product?.variants?.find(
+        (item) => item.sku === sku && item.active,
+      );
       if (!product || !variant) {
         console.error("Purchased product not found:", sku);
         return res.status(500).send("Unable to resolve purchased product.");
@@ -150,42 +162,45 @@ exports.handleStripeWebhook = async (req, res) => {
       });
     }
 
-const metadata = fullSession.metadata || {};
+    const metadata = fullSession.metadata || {};
 
-const shippingAddress = {
-  recipientName: String(metadata.shippingRecipientName || "").trim(),
-  phone: String(metadata.shippingPhone || "").trim(),
-  line1: String(metadata.shippingLine1 || "").trim(),
-  line2: String(metadata.shippingLine2 || "").trim(),
-  city: String(metadata.shippingCity || "").trim(),
-  state: String(metadata.shippingState || "").trim(),
-  postalCode: String(metadata.shippingPostalCode || "").trim(),
-  country: String(metadata.shippingCountry || "").toUpperCase(),
-};
+    const shippingAddress = {
+      recipientName: String(metadata.shippingRecipientName || "").trim(),
+      phone: String(metadata.shippingPhone || "").trim(),
+      line1: String(metadata.shippingLine1 || "").trim(),
+      line2: String(metadata.shippingLine2 || "").trim(),
+      city: String(metadata.shippingCity || "").trim(),
+      state: String(metadata.shippingState || "").trim(),
+      postalCode: String(metadata.shippingPostalCode || "").trim(),
+      country: String(metadata.shippingCountry || "").toUpperCase(),
+    };
 
-if (
-  !shippingAddress.recipientName ||
-  !shippingAddress.phone ||
-  !shippingAddress.line1 ||
-  !shippingAddress.city ||
-  !shippingAddress.state ||
-  !shippingAddress.postalCode ||
-  shippingAddress.country !== "US"
-) {
-  console.error("Missing or invalid validated shipping address.", {
-    sessionId: fullSession.id,
-  });
+    if (
+      !shippingAddress.recipientName ||
+      !shippingAddress.phone ||
+      !shippingAddress.line1 ||
+      !shippingAddress.city ||
+      !shippingAddress.state ||
+      !shippingAddress.postalCode ||
+      shippingAddress.country !== "US"
+    ) {
+      console.error("Missing or invalid validated shipping address.", {
+        sessionId: fullSession.id,
+      });
 
-  return res.status(400).send("Validated shipping details are missing.");
-}
+      return res.status(400).send("Validated shipping details are missing.");
+    }
 
-    const shippingCountry = String(
-      shippingAddress.country || ""
-    ).toUpperCase();
+    const shippingCountry = String(shippingAddress.country || "").toUpperCase();
 
     if (shippingCountry !== "US") {
-      console.error("Rejected paid checkout with unsupported shipping country:", shippingCountry || "missing");
-      return res.status(400).send("NARD & NOTES only ships within the United States.");
+      console.error(
+        "Rejected paid checkout with unsupported shipping country:",
+        shippingCountry || "missing",
+      );
+      return res
+        .status(400)
+        .send("NARD & NOTES only ships within the United States.");
     }
 
     const subtotalInCents = fullSession.amount_subtotal;
@@ -210,6 +225,13 @@ if (
     }
 
     const orderNumber = `NN-${Date.now()}-${session.id.slice(-6).toUpperCase()}`;
+    const discountCode = String(metadata.discountCode || "")
+      .trim()
+      .toUpperCase();
+
+    const promoCodeId = mongoose.Types.ObjectId.isValid(metadata.promoCodeId)
+      ? metadata.promoCodeId
+      : null;
     const order = await Order.create({
       user: user._id,
       orderNumber,
@@ -228,14 +250,20 @@ if (
           : fullSession.payment_intent?.id,
       paymentStatus: "paid",
       status: "processing",
-      discountCode: fullSession.metadata?.discountCode || "",
+      discountCode,
+      promoCodeId,
       shippingProvider: "Standard shipping",
       shippoRateId: "",
-      testMode: String(process.env.STRIPE_SECRET_KEY || "").startsWith("sk_test_"),
+      testMode: String(process.env.STRIPE_SECRET_KEY || "").startsWith(
+        "sk_test_",
+      ),
       emailStatus: "pending",
       paidAt: new Date(),
       statusHistory: [
-        { status: "pending", note: "Order created after verified Stripe payment." },
+        {
+          status: "pending",
+          note: "Order created after verified Stripe payment.",
+        },
         { status: "processing", note: "Payment confirmed by Stripe." },
       ],
     });
@@ -259,7 +287,7 @@ if (
               },
             },
           },
-          { $inc: { "variants.$.stock": -item.quantity } }
+          { $inc: { "variants.$.stock": -item.quantity } },
         );
 
         if (result.modifiedCount !== 1) {
@@ -271,7 +299,7 @@ if (
       for (const item of decremented) {
         await Product.updateOne(
           { _id: item.product, "variants.sku": item.sku },
-          { $inc: { "variants.$.stock": item.quantity } }
+          { $inc: { "variants.$.stock": item.quantity } },
         ).catch(() => {});
       }
       order.paymentStatus = "paid";
@@ -281,8 +309,14 @@ if (
         note: "Paid order requires manual review because inventory could not be reserved.",
       });
       await order.save().catch(() => {});
-      console.error("Inventory finalisation failed for paid order", order.orderNumber, inventoryError.message);
-      return res.status(500).send("Inventory conflict; manual refund/review required.");
+      console.error(
+        "Inventory finalisation failed for paid order",
+        order.orderNumber,
+        inventoryError.message,
+      );
+      return res
+        .status(500)
+        .send("Inventory conflict; manual refund/review required.");
     }
 
     if (order.discountCode) {
@@ -296,8 +330,10 @@ if (
             { $expr: { $lt: ["$redemptionCount", "$maxRedemptions"] } },
           ],
         },
-        { $inc: { redemptionCount: 1 } }
-      ).catch((error) => console.error("Promo redemption count update failed:", error.message));
+        { $inc: { redemptionCount: 1 } },
+      ).catch((error) =>
+        console.error("Promo redemption count update failed:", error.message),
+      );
     }
 
     // Email errors never undo payment or block the remaining order side effects.
@@ -305,7 +341,8 @@ if (
 
     try {
       const alertResult = await sendNewOrderAlert(order);
-      if (!alertResult.sent) console.warn("Store order alert not sent:", alertResult.reason);
+      if (!alertResult.sent)
+        console.warn("Store order alert not sent:", alertResult.reason);
     } catch (alertError) {
       console.error("Store order alert failed:", alertError.message);
     }

@@ -131,9 +131,10 @@ if (
 
     if (req.body.promoCode) {
       const validated = await validatePromo(
-        req.body.promoCode,
-        subtotal
-      );
+  req.body.promoCode,
+  subtotal,
+  "usd"
+);
 
       if (!validated.valid) {
         return res.status(422).json({
@@ -165,7 +166,11 @@ if (
       metadata: {
   userId: String(req.user._id),
   subtotalInCents: String(subtotal),
-  discountCode: promo?.code || "",
+discountCode: promo?.code || "",
+promoCodeId: promo?.promo?._id
+  ? String(promo.promo._id)
+  : "",
+discountInCents: String(promo?.discountInCents || 0),
   shippingProvider: "Standard shipping",
   shippingRateId: "",
 
@@ -227,7 +232,7 @@ if (
                         }
                       : {
                           amount_off: promo.discountInCents,
-                          currency: 'usd',
+                          currency: promo.promo.currency,
                           duration: 'once',
                           name: promo.code,
                         }

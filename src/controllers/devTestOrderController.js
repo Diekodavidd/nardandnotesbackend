@@ -7,7 +7,8 @@ const {
   getRate,
   purchaseLabel,
 } = require('../services/shippoService');
-
+const PromoCode = require('../models/PromoCode');
+const { validatePromo } = require('../services/promoService');
 const { clearPurchasedCart } = require("../services/clearPurchasedCart");
 
 function ensureDevTestingEnabled() {
@@ -331,10 +332,11 @@ exports.createTestOrder = async (req, res, next) => {
       });
     }
 
-    const {
-      items: requestedItems,
-      shippingAddress,
-    } = req.body || {};
+   const {
+  items: requestedItems,
+  shippingAddress,
+  promoCode: requestedPromoCode,
+} = req.body || {};
 
     if (
       !Array.isArray(requestedItems) ||
@@ -411,9 +413,59 @@ exports.createTestOrder = async (req, res, next) => {
       });
     }
 
-    // Fixed shipping policy based on merchandise subtotal before discounts.
-    const shippingInCents = subtotalInCents >= 10000 ? 0 : 599;
+// Fixed shipping policy based on merchandise subtotal before discounts.
+const shippingInCents = subtotalInCents >= 10000 ? 0 : 599;
 
+let discountInCents = 0;
+let discountCode = '';
+let promoCodeId = null;
+
+const normalizedPromoCode = String(requestedPromoCode || '')
+  .trim()
+  .toUpperCase();
+
+if (normalizedPromoCode) {
+  const promoResult = await validatePromo(
+    normalizedPromoCode,
+    subtotalInCents
+  );
+
+  if (!promoResult.valid) {
+    return res.status(422).json({
+      success: false,
+      message: promoResult.message || 'This promo code cannot be used.',
+    });
+  }
+
+  // Use the server-calculated discount, never a frontend-supplied amount.
+  discountInCents = Number(promoResult.discountInCents);
+
+  if (
+    !Number.isSafeInteger(discountInCents) ||
+    discountInCents < 0 ||
+    discountInCents > subtotalInCents
+  ) {
+    throw new Error('Promo service returned an invalid discount amount.');
+  }
+
+  const promoDocument = await PromoCode.findOne({
+    code: normalizedPromoCode,
+    active: true,
+  }).select('_id code');
+
+  if (!promoDocument) {
+    return res.status(422).json({
+      success: false,
+      message: 'This promo code is no longer available.',
+    });
+  }
+
+  discountCode = promoDocument.code;
+  promoCodeId = promoDocument._id;
+}
+
+const totalInCents =
+  subtotalInCents - discountInCents + shippingInCents;
     const shippingProvider = 'Standard shipping';
 
     const shippingService =
@@ -428,10 +480,12 @@ exports.createTestOrder = async (req, res, next) => {
       orderNumber,
       items,
       subtotalInCents,
-      shippingInCents,
-      discountInCents: 0,
-      taxInCents: 0,
-      totalInCents: subtotalInCents + shippingInCents,
+shippingInCents,
+discountInCents,
+taxInCents: 0,
+totalInCents,
+discountCode,
+promoCodeId,
       currency: 'usd',
       shippingAddress: address,
 
@@ -465,7 +519,26 @@ exports.createTestOrder = async (req, res, next) => {
         },
       ],
     });
+// Count the promo redemption for this test order.
+if (order.promoCodeId && order.discountInCents > 0) {
+  const redemptionUpdate = await PromoCode.updateOne(
+    {
+      _id: order.promoCodeId,
+      $or: [
+        { maxRedemptions: null },
+        { maxRedemptions: { $exists: false } },
+        { $expr: { $lt: ["$redemptionCount", "$maxRedemptions"] } },
+      ],
+    },
+    { $inc: { redemptionCount: 1 } }
+  );
 
+  if (redemptionUpdate.modifiedCount !== 1) {
+    console.error(
+      `Promo redemption count was not updated for order ${order.orderNumber}`
+    );
+  }
+}
     let emailResult = {
       sent: false,
       reason: 'not_attempted',
