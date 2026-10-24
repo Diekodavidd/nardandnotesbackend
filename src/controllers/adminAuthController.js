@@ -16,8 +16,8 @@ function safeEqual(a, b) {
 function cookieOptions() {
   return {
     httpOnly: true,
-    secure: process.env.NODE_ENV === "production",
-    sameSite: "strict",
+    secure: true,
+    sameSite: "none",
     path: "/api/admin",
     maxAge: 8 * 60 * 60 * 1000,
   };
