@@ -7,6 +7,7 @@ const helmet = require("helmet");
 const rateLimit = require("express-rate-limit");
 
 const connectDatabase = require("./config/database");
+
 const productRoutes = require("./routes/productRoutes");
 const authRoutes = require("./routes/authRoutes");
 const checkoutRoutes = require("./routes/checkoutRoutes");
@@ -15,18 +16,25 @@ const cartRoutes = require("./routes/cartRoutes");
 const orderRoutes = require("./routes/orderRoutes");
 const shippingRoutes = require("./routes/shippingRoutes");
 const promoRoutes = require("./routes/promoRoutes");
+
 const adminDashboardRoutes = require("./routes/adminDashboardRoutes");
 const adminOrderRoutes = require("./routes/adminOrderRoutes");
 const adminPromoRoutes = require("./routes/adminPromoRoutes");
 const adminAuthRoutes = require("./routes/adminAuthRoutes");
 const adminInventoryRoutes = require("./routes/adminInventoryRoutes");
-const stripeWebhookController = require("./controllers/stripeWebhookController");
 const adminProductRoutes = require("./routes/adminProductRoutes");
 const adminSettingsRoutes = require("./routes/adminSettingsRoutes");
 
+const stripeWebhookController = require("./controllers/stripeWebhookController");
+
 const app = express();
-app.set("trust proxy", 1);
+
 app.disable("x-powered-by");
+app.set("trust proxy", 1);
+
+if (!process.env.JWT_SECRET) {
+  throw new Error("JWT_SECRET is required.");
+}
 
 app.use(helmet());
 
@@ -40,27 +48,31 @@ const allowedOrigins = [
 app.use(
   cors({
     origin: (origin, callback) => {
-      // Allow requests without an Origin header, such as server-to-server calls.
       if (!origin || allowedOrigins.includes(origin)) {
         return callback(null, true);
       }
 
       return callback(new Error("Origin not allowed by CORS."));
     },
-    credentials: true,
-    methods: ["GET", "HEAD", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+    credentials: false,
+    methods: [
+      "GET",
+      "HEAD",
+      "POST",
+      "PUT",
+      "PATCH",
+      "DELETE",
+      "OPTIONS",
+    ],
     allowedHeaders: [
       "Content-Type",
       "Authorization",
-      "x-admin-api-key",
     ],
     optionsSuccessStatus: 204,
   })
 );
 
-// Stripe requires the raw request body for signature verification.
-// Keep this route before express.json().
-
+// Stripe webhook must receive the raw body.
 app.post(
   "/api/checkout/webhook",
   express.raw({ type: "application/json" }),
@@ -94,7 +106,7 @@ app.use("/api/shipping", shippingRoutes);
 app.use("/api/promos", promoRoutes);
 app.use("/api/account/cart", cartRoutes);
 
-// Admin routes
+// Admin authentication and protected routes.
 app.use("/api/admin/auth", adminAuthRoutes);
 app.use("/api/admin/orders", adminOrderRoutes);
 app.use("/api/admin/promos", adminPromoRoutes);
@@ -103,7 +115,6 @@ app.use("/api/admin", adminDashboardRoutes);
 app.use("/api/admin/products", adminProductRoutes);
 app.use("/api/admin/settings", adminSettingsRoutes);
 
-// API 404 handler
 app.use((req, res) => {
   res.status(404).json({
     success: false,
@@ -111,7 +122,6 @@ app.use((req, res) => {
   });
 });
 
-// Central error handler
 app.use((error, req, res, next) => {
   console.error("API error:", error.message);
 
@@ -138,7 +148,7 @@ async function startServer() {
     const port = process.env.PORT || 5000;
 
     app.listen(port, () => {
-      console.log(`API running on port ${port}`);
+      console.log(`NARD & NOTES API running on port ${port}`);
     });
   } catch (error) {
     console.error("Failed to start API:", error.message);

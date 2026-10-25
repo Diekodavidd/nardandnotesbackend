@@ -1,136 +1,71 @@
 
-const crypto = require("crypto");
+const bcrypt = require("bcryptjs");
 const jwt = require("jsonwebtoken");
+const Admin = require("../models/Admin");
 
-const COOKIE_NAME = "nn_admin_session";
-const SESSION_TTL = "8h";
+exports.login = async (req, res, next) => {
+  try {
+    const email = String(req.body?.email || "")
+      .trim()
+      .toLowerCase();
 
-function safeEqual(a, b) {
-  const left = Buffer.from(String(a || ""));
-  const right = Buffer.from(String(b || ""));
+    const password = String(req.body?.password || "");
 
-  return left.length === right.length &&
-    crypto.timingSafeEqual(left, right);
-}
-
-function cookieOptions() {
-  return {
-    httpOnly: true,
-    secure: true,
-    sameSite: "none",
-    path: "/api/admin",
-    maxAge: 8 * 60 * 60 * 1000,
-  };
-}
-
-function readCookie(req, name) {
-  const header = req.headers.cookie || "";
-
-  for (const part of header.split(";")) {
-    const index = part.indexOf("=");
-    if (index < 0) continue;
-
-    const key = part.slice(0, index).trim();
-    if (key === name) {
-      try {
-        return decodeURIComponent(part.slice(index + 1).trim());
-      } catch {
-        return "";
-      }
+    if (!email || !password) {
+      return res.status(400).json({
+        success: false,
+        message: "Email and password are required.",
+      });
     }
-  }
 
-  return "";
-}
+    const admin = await Admin.findOne({ email }).select("+passwordHash");
 
-exports.login = (req, res) => {
-  const email = String(req.body?.email || "").trim().toLowerCase();
-  const password = String(req.body?.password || "");
+    if (
+      !admin ||
+      !admin.isActive ||
+      !(await bcrypt.compare(password, admin.passwordHash))
+    ) {
+      return res.status(401).json({
+        success: false,
+        message: "Invalid email or password.",
+      });
+    }
 
-  const adminEmail = String(process.env.ADMIN_EMAIL || "")
-    .trim()
-    .toLowerCase();
-  const adminPassword = String(process.env.ADMIN_PASSWORD || "");
-  const sessionSecret = process.env.ADMIN_SESSION_SECRET;
+    const token = jwt.sign(
+      { sub: admin._id.toString(), role: admin.role },
+      process.env.JWT_SECRET,
+      { expiresIn: "8h" }
+    );
 
-  if (!adminEmail || !adminPassword || !sessionSecret) {
-    return res.status(503).json({
-      message: "Admin authentication is not configured.",
+    return res.json({
+      success: true,
+      token,
+      expiresIn: 28800,
+      admin: {
+        id: admin._id,
+        name: admin.name,
+        email: admin.email,
+        role: admin.role,
+      },
     });
+  } catch (error) {
+    next(error);
   }
-
-  if (
-    !safeEqual(email, adminEmail) ||
-    !safeEqual(password, adminPassword)
-  ) {
-    return res.status(401).json({
-      message: "Invalid email or password.",
-    });
-  }
-
-  const token = jwt.sign(
-    { sub: "nard-notes-admin", purpose: "admin-session" },
-    sessionSecret,
-    { expiresIn: SESSION_TTL, issuer: "nard-notes" }
-  );
-
-  res.cookie(COOKIE_NAME, token, cookieOptions());
-
-  return res.json({
-    success: true,
-    admin: { email: adminEmail },
-  });
 };
 
-
-exports.me = (req, res) => {
-  const session = exports.verifySession(req);
-
-  if (!session) {
-    return res.status(401).json({
-      authenticated: false,
-      message: "A valid admin session is required.",
-    });
-  }
-
+exports.me = async (req, res) => {
   return res.json({
     authenticated: true,
     admin: {
-      email: process.env.ADMIN_EMAIL.trim().toLowerCase(),
+      id: req.admin._id,
+      name: req.admin.name,
+      email: req.admin.email,
+      role: req.admin.role,
     },
   });
 };
 
-
 exports.logout = (req, res) => {
-  res.clearCookie(COOKIE_NAME, {
-    ...cookieOptions(),
-    maxAge: undefined,
-  });
-
+  // JWT logout is performed by removing the token on the frontend.
   return res.json({ success: true });
-};
-
-exports.verifySession = (req) => {
-  const token = readCookie(req, COOKIE_NAME);
-  if (!token || !process.env.ADMIN_SESSION_SECRET) return null;
-
-  try {
-    const payload = jwt.verify(
-      token,
-      process.env.ADMIN_SESSION_SECRET,
-      { issuer: "nard-notes" }
-    );
-
-    if (
-      payload.sub !== "nard-notes-admin" ||
-      payload.purpose !== "admin-session"
-    ) {
-      return null;
-    }
-
-    return payload;
-  } catch {
-    return null;
-  }
 };

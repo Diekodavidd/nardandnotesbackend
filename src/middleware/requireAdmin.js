@@ -1,35 +1,49 @@
 
-const crypto = require("crypto");
-const { verifySession } = require("../controllers/adminAuthController");
+const jwt = require("jsonwebtoken");
+const Admin = require("../models/Admin");
 
-function safeEqual(a, b) {
-  const left = Buffer.from(String(a || ""));
-  const right = Buffer.from(String(b || ""));
+module.exports = async function requireAdmin(req, res, next) {
+  try {
+    const authorization = req.headers.authorization || "";
+    const [scheme, token] = authorization.split(" ");
 
-  return left.length === right.length &&
-    crypto.timingSafeEqual(left, right);
-}
+    if (scheme !== "Bearer" || !token) {
+      return res.status(401).json({
+        success: false,
+        message: "Admin authentication required.",
+      });
+    }
 
-module.exports = function requireAdmin(req, res, next) {
-  // Browser dashboard authentication.
-  if (verifySession(req)) {
-    return next();
+    let payload;
+
+    try {
+      payload = jwt.verify(token, process.env.JWT_SECRET);
+    } catch {
+      return res.status(401).json({
+        success: false,
+        message: "Your admin token is invalid or expired.",
+      });
+    }
+
+    if (!payload.sub) {
+      return res.status(401).json({
+        success: false,
+        message: "Invalid admin token.",
+      });
+    }
+
+    const admin = await Admin.findById(payload.sub);
+
+    if (!admin || !admin.isActive || admin.role !== "superadmin") {
+      return res.status(401).json({
+        success: false,
+        message: "Admin authentication required.",
+      });
+    }
+
+    req.admin = admin;
+    next();
+  } catch (error) {
+    next(error);
   }
-
-  // Preserve existing API-key authentication.
-  const expected = process.env.ADMIN_API_KEY;
-  const supplied = req.headers["x-admin-api-key"];
-
-  if (
-    expected &&
-    typeof supplied === "string" &&
-    safeEqual(supplied, expected)
-  ) {
-    return next();
-  }
-
-  return res.status(401).json({
-    success: false,
-    message: "Admin authentication required.",
-  });
 };
